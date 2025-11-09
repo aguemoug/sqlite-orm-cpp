@@ -35,7 +35,7 @@ It eliminates runtime ORM overhead while maintaining full **type safety** and **
 // entities.h
 #pragma once
 #include <string>
-#include "orm.h"
+#include "include/orm.h"
 struct  TABLE(users) User {
   PK AUTOINC int id;
   std::string username;
