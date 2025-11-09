@@ -16,8 +16,40 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import clang.cindex
-from clang.cindex import CursorKind
+from clang.cindex import CursorKind, TranslationUnit
 from jinja2 import Template
+
+MACRO = """
+#ifdef __CODE_GENERATOR__
+#define TABLE(name) __attribute__((annotate("table:" #name)))
+#define VIEW(name) __attribute__((annotate("view:" #name)))
+#define IGNORE __attribute__((annotate("ignore")))
+#define PK __attribute__((annotate("pk")))
+#define FK __attribute__((annotate("fk")))
+#define AUTOINC __attribute__((annotate("autoinc")))
+#define READONLY __attribute__((annotate("readonly")))
+#else
+#define TABLE(name)
+#define VIEW(name)
+#define IGNORE
+#define PK
+#define FK
+#define AUTOINC
+#define READONLY
+#endif
+"""
+
+
+def inject_orm_header_smartly(filename):
+    try:
+        index = clang.cindex.Index.create()
+        args = [f"-I{dir}" for dir in include_dirs] + [
+            "-I" + os.path.dirname(orm_header_path)
+        ]
+        tu = index.parse(temp_filename, args=args)
+        return tu, combined_content
+    finally:
+        os.unlink(temp_filename)
 
 
 class StructParser:
@@ -67,32 +99,61 @@ class StructParser:
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
 
+        with open(file_path, "r") as f:
+            original_content = f.read()
+
+        # Find all include directives to inject ORM header at the right place
+        lines = original_content.split("\n")
+        injection_point = 0
+
+        # Find the last include statement or start of file
+        for i, line in enumerate(lines):
+            if line.strip().startswith("#include"):
+                injection_point = i + 1
+            elif line.strip() and not line.strip().startswith("#"):
+                # Found non-preprocessor code, stop here
+                break
+
+        # Inject ORM header content
+        lines.insert(injection_point, f"// Injected ORM header content\n{MACRO}")
+        combined_content = "\n".join(lines)
+
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as f:
+            f.write(combined_content)
+        temp_filename = f.name
+
         # Default compiler arguments
         if compiler_args is None:
             compiler_args = [
                 "-x",
                 "c++",
-                "-std=c++20",
+                "-std=c++14",
                 "-D__CODE_GENERATOR__",
             ]
 
         try:
             index = clang.cindex.Index.create()
-            translation_unit = index.parse(str(file_path), args=compiler_args)
+            translation_unit = index.parse(
+                str(temp_filename),
+                args=compiler_args,
+            )
         except Exception as e:
             raise RuntimeError(f"Failed to parse file {file_path}: {e}")
 
-        target_stem = file_path.stem
+        target_stem = Path(temp_filename).stem
         structs = []
 
         for node in translation_unit.cursor.walk_preorder():
             # Skip nodes that don't belong to our target file
             if self._should_skip_node(node, target_stem):
+                # print(f"Skipping node from different file: {node.spelling}")
                 continue
+            # print(f"Visiting node: {node.spelling} of kind {node.kind}")
 
             if (
                 node.kind == CursorKind.STRUCT_DECL
-                and node.is_definition()
+                # and node.is_definition()
                 and node.spelling
             ):  # Skip anonymous structs
 
@@ -116,6 +177,7 @@ class StructParser:
             return True
 
         node_file_stem = Path(node.location.file.name).stem
+        # print(node_file_stem, target_stem)
         return node_file_stem != target_stem
 
     def _parse_struct_node(self, node: clang.cindex.Cursor) -> Dict[str, Any]:
@@ -562,7 +624,9 @@ def apply(template_name, entity):
         )
 
 
-def generate_crud_header(entities, source_file: str, namespace: str = "data"):
+def generate_crud_header(
+    entities, source_file: str, templates_dir: str, namespace: str = "data"
+):
     """Generate complete CRUD header file with operations for both tables and views"""
 
     # Separate entities by type
@@ -585,25 +649,25 @@ def generate_crud_header(entities, source_file: str, namespace: str = "data"):
             or entity.entity_type == EntityType.VIEW
         ):
             select_all_functions[entity.name] = apply(
-                "templates/select-all.jinja", entity
+                templates_dir + "/select-all.jinja", entity
             )
             if entity.HasPrimaryKeys:
                 select_by_id_functions[entity.name] = apply(
-                    "templates/select.jinja", entity
+                    templates_dir + "/select.jinja", entity
                 )
                 if entity.entity_type == EntityType.TABLE:
                     update_functions[entity.name] = apply(
-                        "templates/update.jinja", entity
+                        templates_dir + "/update.jinja", entity
                     )
                     delete_functions[entity.name] = apply(
-                        "templates/delete.jinja", entity
+                        templates_dir + "/delete.jinja", entity
                     )
                     insert_functions[entity.name] = apply(
-                        "templates/insert.jinja", entity
+                        templates_dir + "/insert.jinja", entity
                     )
 
     # Load master template
-    tmpl = Template(open("templates/master.jinja").read())
+    tmpl = Template(open(templates_dir + "/master.jinja").read())
 
     return tmpl.render(
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -621,12 +685,18 @@ def generate_crud_header(entities, source_file: str, namespace: str = "data"):
 
 
 def generate_complete_crud(
-    entities, source_file: str, output_file: str = "output.hpp", namespace: str = "data"
+    entities,
+    source_file: str,
+    templates_dir: str,
+    output_file: str = "output.hpp",
+    namespace: str = "data",
 ):
     """Generate and save complete CRUD header file with tables and views"""
 
     try:
-        header_content = generate_crud_header(entities, source_file, namespace)
+        header_content = generate_crud_header(
+            entities, source_file, templates_dir, namespace
+        )
         header_content = format_with_clangformat(header_content)
 
         with open(output_file, "w") as f:
@@ -691,6 +761,12 @@ Examples:
     )
 
     parser.add_argument(
+        "-t",
+        "--template",
+        default="templates",
+        help="templates directory (default: templates)",
+    )
+    parser.add_argument(
         "-n",
         "--namespace",
         default="data",
@@ -725,7 +801,7 @@ Examples:
         sys.exit(1)
 
     # Check if templates directory exists
-    if not os.path.exists("templates"):
+    if not os.path.exists(args.template):
         print("Error: 'templates' directory not found")
         print("Please ensure you're running from the project root directory")
         sys.exit(1)
@@ -744,6 +820,7 @@ Examples:
         success = generate_complete_crud(
             entities=entities,
             source_file=args.input_file,
+            templates_dir=args.template,
             output_file=args.output,
             namespace=args.namespace,
         )
