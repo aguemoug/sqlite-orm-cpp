@@ -1,0 +1,15 @@
+// {{ entity.Name }} Select By ID function
+inline {{ entity.Name }} selectById(sqlite::database &db{% if
+entity.PkParms %}, {{ entity.PkParms | join(', ') }}{% endif %}) {
+    {{ entity.Name }} obj;
+    db << "SELECT {{ entity.Fields | join(', ') }} FROM {{
+        entity.Target }} WHERE {{ entity.PrimaryKeys | join(' = ? AND ') }} = ?;"
+        {% for pk in entity.PrimaryKeys %}
+        << {{ pk }}
+        {% endfor %}
+        >> [&]({{ entity.TypedNames | join(', ') }}) {
+            {% for field in entity.Fields %}
+            obj.{{ field }} = {{ field }};{% endfor %}
+        };
+    return obj;
+}

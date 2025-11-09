@@ -1,0 +1,9 @@
+// {{ entity.Name }} Select All function
+inline std::vector<{{ entity.Name }}> selectAll(sqlite::database &db) {
+    std::vector<{{ entity.Name }}> results;
+    db << "SELECT {{ entity.Fields | join(', ') }} FROM {{ entity.Target }};"
+        >> [&]({{ entity.TypedNames | join(', ') }}) {
+            results.emplace_back({{ fields | join(', ') }});
+        };
+    return results;
+}

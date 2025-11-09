@@ -1,0 +1,7 @@
+// {{ entity.Name }} Insert function 
+inline void insert(sqlite::database &db, const {{ entity.Name }} &obj) {
+    db << "INSERT INTO {{ entity.Target }} ({{ entity.InsertFields |
+    join(', ') }})  VALUES ({{entity.InsertFieldsPlaceholders}});"
+       {% for field in entity.InsertFields %} 
+       << obj.{{ field }} {% endfor %};
+}

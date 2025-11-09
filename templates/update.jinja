@@ -1,0 +1,9 @@
+// {{ entity.Name }} Update function
+inline void update(sqlite::database &db, const {{ entity.Name }} &obj) {
+    db << "UPDATE {{ entity.Target }} SET {{ entity.Fields | join(' =?, ') }} = ? WHERE {{ entity.PrimaryKeys | join(' = ? AND ') }} = ?;"
+        {% for field in entity.Fields %}
+        << obj.{{ field }}{% endfor %}
+        {% for pk in entity.PrimaryKeys %}
+        << obj.{{ pk }}
+        {% endfor %};
+}
