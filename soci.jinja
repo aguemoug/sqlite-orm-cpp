@@ -1,0 +1,205 @@
+#pragma once
+// ===================================================
+// Auto-generated SOCI mapping and CRUD operations
+// Generated on: {{ timestamp }}
+// Source: {{ source_file }}
+// Tables: {{ tables | map(attribute='name') | join(', ') }}
+// Views: {{ views | map(attribute='name') | join(', ') }}
+// ===================================================
+
+#include <soci/soci.h>
+#include <soci/sqlite3/soci-sqlite3.h>
+#include <vector>
+#include <iomanip>
+#include "{{source_file}}"
+
+
+// SOCI Type mapping 
+namespace soci{
+using namespace {{ namespace }};
+{% for entity in entities %}
+
+// Entity : {{ entity.Name }} Target table/view 
+template <>
+struct type_conversion<{{entity.Name}}>
+{
+  typedef values base_type;
+
+  static void from_base(values const& v, indicator /* ind */,
+  {{entity.Name}} & e)
+  {
+
+   {% for f in entity.fields %} 
+      e.{{f.name}} = v.get<{{f.original_type}}>("{{f.name}}");      {% endfor %}
+
+  }
+
+  static void to_base(const {{entity.Name}}& e, values& v, indicator& ind)
+  {
+   {% for field in entity.fields %} 
+      v.set("{{field.name}}", e.{{field.name}});    {% endfor %}
+      ind = i_ok;
+  }
+};
+
+{% endfor %}
+
+} // namespace soci
+
+
+
+namespace {{ namespace }} {
+
+//-----------------------------------------------------------
+template <typename T, typename... Args>
+std::vector<T> getMultipleQuery(soci::session& sql, const std::string& query, Args... args)
+{
+  T r;
+  std::vector<T> objs;
+  soci::statement st(sql);
+  // Expand and bind all arguments
+  (st.exchange(soci::use(args)), ...);
+  st.alloc();
+  st.prepare(query);
+  st.define_and_bind();
+  // after define_and_bind and before execute
+  st.exchange_for_rowset(soci::into(r));
+  st.execute(false);
+  // Convert to rowset and use directly
+  soci::rowset_iterator<T> it(st, r);
+  soci::rowset_iterator<T> end;
+  for (; it != end; ++it)
+  {
+    objs.push_back(*it);
+  }
+  return objs;
+}
+
+template <typename T, typename... Args>
+T getSingleleQuery(soci::session& sql, const std::string& query, Args... args)
+{
+  T r;
+  soci::statement st(sql);
+  (st.exchange(soci::use(args)), ...);
+  st.exchange(soci::into(r));
+  st.alloc();
+  st.prepare(query);
+  st.define_and_bind();
+  st.execute(true);
+  return r;
+}
+
+template <typename... Args>
+bool singleObjectOperation(soci::session& sql, const std::string& query, Args&&... args)
+{
+  soci::statement st(sql);
+  (st.exchange(soci::use(args)), ...);
+  st.alloc();
+  st.prepare(query);
+  st.define_and_bind();
+  st.execute(true);
+  return true;
+}
+
+//-----------------------------------------------------------
+
+template <typename T, size_t N, bool IsView = false>
+struct EntityMetadataBase
+{
+  using type = T;
+  static constexpr bool is_view = IsView;
+  static constexpr size_t field_count = N;
+};
+
+template <typename T>
+struct EntityMetadata;
+
+template <typename T>
+std::ostream& print_header(std::ostream& os)
+{
+  std::apply([&](auto... m) { ((os << std::left << std::setw(std::get<2>(m)) << std::get<0>(m)), ...); },
+             EntityMetadata<T>::members);
+  return os;
+}
+
+template <typename T>
+std::ostream& print_row(std::ostream& os, const T& obj)
+{
+  std::apply([&](auto... m) { ((os << std::left << std::setw(std::get<2>(m)) << obj.*(std::get<1>(m))), ...); },
+             EntityMetadata<T>::members);
+  return os;
+}
+template <typename T>
+void printHeader();
+
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec)
+{
+  print_header<T>(os) << "\n";
+  for (const auto& item : vec) print_row(os, item) << '\n';
+  return os;
+}
+
+
+//-------------------------------------------------------------
+
+
+// Insert
+template <typename T>
+bool insert(soci::session& sql, const T& obj);
+{% for entity in tables %}
+
+template<>
+bool insert<{{entity.name}}>(soci::session& sql, const {{entity.name}}& obj)
+{
+  return singleObjectOperation(sql, "INSERT INTO {{entity.Target}} ({{entity.InsertFields |
+  join(', ')}}) VALUES (:{{entity.InsertFields | join(', :')}})", obj);
+}
+
+{% endfor %}
+// Select by ID
+template <typename T,typename IdType>
+T selectById(soci::session& sql, const IdType& id);
+
+
+
+
+// Select all
+
+
+template <typename T>
+std::vector<T> selectAll(soci::session& sql);
+
+
+{% for entity in entities %}
+template <>
+std::vector<{{entity.name}}> selectAll<{{entity.name}}>(soci::session& sql)
+{
+  return getMultipleQuery<{{entity.name}}>(sql, "SELECT {{entity.Fields | join(', ') }} FROM {{entity.Target}} ");
+}
+
+
+{% endfor %}
+
+
+//---------------------Metadata Functions---------------------/
+
+
+{% for entity in entities %}
+template <>
+struct EntityMetadata<{{entity.name}}> : EntityMetadataBase<{{entity.name}}, {{entity.fields | length}}, {{ 'true' if entity.is_view else 'false' }}>
+{
+  static constexpr const char* table_name = "{{entity.Target}}";
+  static constexpr auto members = std::make_tuple(
+    {% for field in entity.fields -%}
+      std::tuple{"{{field.name}}", &type::{{field.name}}, {{field.width}}u, "{{field.sql_type}}"}{{ "," if not loop.last }}
+    {%- endfor %} );
+};
+
+
+{% endfor %}
+
+
+
+
+} // namespace {{ namespace }}

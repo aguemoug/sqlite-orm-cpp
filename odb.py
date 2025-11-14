@@ -28,6 +28,7 @@ MACRO = """
 #define FK __attribute__((annotate("fk")))
 #define AUTOINC __attribute__((annotate("autoinc")))
 #define READONLY __attribute__((annotate("readonly")))
+#define WIDTH(w) __attribute__((annotate("width:" #w)))
 #else
 #define TABLE(name)
 #define VIEW(name)
@@ -36,6 +37,7 @@ MACRO = """
 #define FK
 #define AUTOINC
 #define READONLY
+#define WIDTH(w)
 #endif
 """
 
@@ -239,6 +241,7 @@ class EntityType:
 class Field:
     name: str
     is_primary_key: bool = False
+    width: int = 20
     is_foreign_key: bool = False
     is_auto_increment: bool = False
     is_readonly: bool = False
@@ -306,6 +309,14 @@ class Entity:
         return [f"{f.original_type} {f.name}" for f in self.fields]
 
     @property
+    def TypedPrimaryKeysRefs(self):
+        return [
+            f"const { f.original_type} & {f.name}"
+            for f in self.fields
+            if f.is_primary_key
+        ]
+
+    @property
     def TypedPrimaryKeys(self):
         return [f"{f.original_type} {f.name}" for f in self.fields if f.is_primary_key]
 
@@ -313,6 +324,12 @@ class Entity:
     def PkParms(self):
         return [
             f"{self.getFieldByName(pk).original_type} {pk}" for pk in self.PrimaryKeys
+        ]
+
+    @property
+    def PkParmsRefs(self):
+        return [
+            f"{self.getFieldByName(pk).original_type} & {pk}" for pk in self.PrimaryKeys
         ]
 
 
@@ -326,6 +343,7 @@ class EntityParser:
         # Patterns for macro annotations
         self.table_pattern = re.compile(r'table:([^"]+)')
         self.view_pattern = re.compile(r'view:([^"]+)')
+        self.width_pattern = re.compile(r'width:([^"]+)')
         self.ignore_pattern = re.compile(r"ignore")
         self.primary_key_patterns = [re.compile(r"pk")]
         self.foreign_key_patterns = [re.compile(r"fk")]
@@ -489,6 +507,7 @@ class EntityParser:
             field.is_auto_increment = self._is_auto_increment(field_data)
             field.is_readonly = self._is_readonly(field_data)
             field.is_ignored = self._should_ignore_field(field_data)
+            field.width = self._get_field_width(field_data)
 
             fields.append(field)
 
@@ -500,6 +519,17 @@ class EntityParser:
             if self.ignore_pattern.search(annotation):
                 return True
         return False
+
+    def _get_field_width(self, field_data: Dict[str, Any]) -> int:
+        """Get the width of a field from WIDTH annotation"""
+        for annotation in field_data.get("attrs", []):
+            width_match = self.width_pattern.search(annotation)
+            if width_match:
+                try:
+                    return int(width_match.group(1).strip())
+                except ValueError:
+                    pass
+        return 15  # Default width
 
     def _is_primary_key(self, field_data: Dict[str, Any]) -> bool:
         """Check if a field has PK annotation"""
@@ -636,51 +666,16 @@ def generate_crud_header(
     views = [e for e in entities if not e.ignored and e.entity_type == EntityType.VIEW]
     all_entities = tables + views
 
-    # Generate operations
-    insert_functions = {}
-    select_all_functions = {}
-    select_by_id_functions = {}
-    update_functions = {}
-    delete_functions = {}
-
-    for entity in all_entities:
-        if (
-            entity.entity_type == EntityType.TABLE
-            or entity.entity_type == EntityType.VIEW
-        ):
-            select_all_functions[entity.name] = apply(
-                templates_dir + "/select-all.jinja", entity
-            )
-            if entity.HasPrimaryKeys:
-                select_by_id_functions[entity.name] = apply(
-                    templates_dir + "/select.jinja", entity
-                )
-                if entity.entity_type == EntityType.TABLE:
-                    update_functions[entity.name] = apply(
-                        templates_dir + "/update.jinja", entity
-                    )
-                    delete_functions[entity.name] = apply(
-                        templates_dir + "/delete.jinja", entity
-                    )
-                    insert_functions[entity.name] = apply(
-                        templates_dir + "/insert.jinja", entity
-                    )
-
     # Load master template
-    tmpl = Template(open(templates_dir + "/master.jinja").read())
+    tmpl = Template(open(templates_dir + "/soci.jinja").read())
 
     return tmpl.render(
         timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        source_file=source_file,
+        source_file=os.path.basename(source_file),
         namespace=namespace,
         entities=all_entities,
         tables=tables,
         views=views,
-        insert_functions=insert_functions,
-        select_all_functions=select_all_functions,
-        select_by_id_functions=select_by_id_functions,
-        update_functions=update_functions,
-        delete_functions=delete_functions,
     )
 
 
@@ -750,7 +745,9 @@ Examples:
     )
 
     parser.add_argument(
-        "input_file", help="Input C++ header file with struct definitions"
+        "input_file",
+        default="entities.h",
+        help="Input C++ header file with struct definitions",
     )
 
     parser.add_argument(
@@ -763,7 +760,7 @@ Examples:
     parser.add_argument(
         "-t",
         "--template",
-        default="templates",
+        default="./",
         help="templates directory (default: templates)",
     )
     parser.add_argument(
@@ -788,7 +785,11 @@ Examples:
     )
 
     parser.add_argument(
-        "-v", "--verbose", action="store_true", help="Enable verbose output"
+        "-v",
+        "--verbose",
+        default=True,
+        action="store_true",
+        help="Enable verbose output",
     )
 
     parser.add_argument("--version", action="version", version="CPP-SQLite-ORM 1.0.0")

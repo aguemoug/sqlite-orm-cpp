@@ -1,222 +1,328 @@
 #pragma once
 // ===================================================
-// Auto-generated CRUD operations
-// Generated on: 2025-11-09 22:30:27
+// Auto-generated SOCI mapping and CRUD operations
+// Generated on: 2025-11-14 22:27:17
 // Source: entities.h
 // Tables: User, Product, Order
 // Views: UserSummary
 // ===================================================
 
 #include "entities.h"
-#include <sqlite_modern_cpp.h>
-#include <string>
+#include <iomanip>
+#include <soci/soci.h>
+#include <soci/sqlite3/soci-sqlite3.h>
 #include <vector>
 
-using namespace sqlite;
-namespace data {
+// SOCI Type mapping
+namespace soci
+{
+using namespace data;
 
-// ============================================================================
-// User TABLE CRUD Operations
-// Target: users
-// ============================================================================
+// Entity : User Target table/view
+template <>
+struct type_conversion<User>
+{
+  typedef values base_type;
 
-// User Insert function
-inline void insert(sqlite::database &db, const User &obj) {
-  db << "INSERT INTO users (username, email, age, created_at)  VALUES (?, ?, "
-        "?, ?);"
+  static void from_base(values const& v, indicator /* ind */, User& e)
+  {
+    e.id = v.get<int>("id");
+    e.username = v.get<std::string>("username");
+    e.email = v.get<std::string>("email");
+    e.age = v.get<int>("age");
+    e.created_at = v.get<long>("created_at");
+  }
 
-     << obj.username << obj.email << obj.age << obj.created_at;
+  static void to_base(const User& e, values& v, indicator& ind)
+  {
+    v.set("id", e.id);
+    v.set("username", e.username);
+    v.set("email", e.email);
+    v.set("age", e.age);
+    v.set("created_at", e.created_at);
+    ind = i_ok;
+  }
+};
+
+// Entity : Product Target table/view
+template <>
+struct type_conversion<Product>
+{
+  typedef values base_type;
+
+  static void from_base(values const& v, indicator /* ind */, Product& e)
+  {
+    e.product_id = v.get<int>("product_id");
+    e.name = v.get<std::string>("name");
+    e.description = v.get<std::string>("description");
+    e.price = v.get<double>("price");
+    e.stock_quantity = v.get<int>("stock_quantity");
+    e.is_available = v.get<bool>("is_available");
+  }
+
+  static void to_base(const Product& e, values& v, indicator& ind)
+  {
+    v.set("product_id", e.product_id);
+    v.set("name", e.name);
+    v.set("description", e.description);
+    v.set("price", e.price);
+    v.set("stock_quantity", e.stock_quantity);
+    v.set("is_available", e.is_available);
+    ind = i_ok;
+  }
+};
+
+// Entity : Order Target table/view
+template <>
+struct type_conversion<Order>
+{
+  typedef values base_type;
+
+  static void from_base(values const& v, indicator /* ind */, Order& e)
+  {
+    e.order_id = v.get<int>("order_id");
+    e.user_id = v.get<int>("user_id");
+    e.total_amount = v.get<double>("total_amount");
+    e.status = v.get<std::string>("status");
+  }
+
+  static void to_base(const Order& e, values& v, indicator& ind)
+  {
+    v.set("order_id", e.order_id);
+    v.set("user_id", e.user_id);
+    v.set("total_amount", e.total_amount);
+    v.set("status", e.status);
+    ind = i_ok;
+  }
+};
+
+// Entity : UserSummary Target table/view
+template <>
+struct type_conversion<UserSummary>
+{
+  typedef values base_type;
+
+  static void from_base(values const& v, indicator /* ind */, UserSummary& e)
+  {
+    e.user_id = v.get<int>("user_id");
+    e.username = v.get<std::string>("username");
+    e.order_count = v.get<int>("order_count");
+    e.total_spent = v.get<double>("total_spent");
+  }
+
+  static void to_base(const UserSummary& e, values& v, indicator& ind)
+  {
+    v.set("user_id", e.user_id);
+    v.set("username", e.username);
+    v.set("order_count", e.order_count);
+    v.set("total_spent", e.total_spent);
+    ind = i_ok;
+  }
+};
+
+}  // namespace soci
+
+namespace data
+{
+
+//-----------------------------------------------------------
+template <typename T, typename... Args>
+std::vector<T> getMultipleQuery(soci::session& sql, const std::string& query, Args... args)
+{
+  T r;
+  std::vector<T> objs;
+  soci::statement st(sql);
+  // Expand and bind all arguments
+  (st.exchange(soci::use(args)), ...);
+  st.alloc();
+  st.prepare(query);
+  st.define_and_bind();
+  // after define_and_bind and before execute
+  st.exchange_for_rowset(soci::into(r));
+  st.execute(false);
+  // Convert to rowset and use directly
+  soci::rowset_iterator<T> it(st, r);
+  soci::rowset_iterator<T> end;
+  for (; it != end; ++it)
+  {
+    objs.push_back(*it);
+  }
+  return objs;
 }
 
-// User Select All function
-inline std::vector<User> selectAll(sqlite::database &db) {
-  std::vector<User> results;
-  db << "SELECT id, username, email, age, created_at FROM users;" >>
-      [&](int id, std::string username, std::string email, int age,
-          long created_at) { results.emplace_back(); };
-  return results;
+template <typename T, typename... Args>
+T getSingleleQuery(soci::session& sql, const std::string& query, Args... args)
+{
+  T r;
+  soci::statement st(sql);
+  (st.exchange(soci::use(args)), ...);
+  st.exchange(soci::into(r));
+  st.alloc();
+  st.prepare(query);
+  st.define_and_bind();
+  st.execute(true);
+  return r;
 }
 
-// User Select By ID function
-inline User selectById(sqlite::database &db, int id) {
-  User obj;
-  db << "SELECT id, username, email, age, created_at FROM users WHERE id = ?;"
-
-     << id
-
-      >> [&](int id, std::string username, std::string email, int age,
-             long created_at) {
-          obj.id = id;
-          obj.username = username;
-          obj.email = email;
-          obj.age = age;
-          obj.created_at = created_at;
-        };
-  return obj;
+template <typename... Args>
+bool singleObjectOperation(soci::session& sql, const std::string& query, Args&&... args)
+{
+  soci::statement st(sql);
+  (st.exchange(soci::use(args)), ...);
+  st.alloc();
+  st.prepare(query);
+  st.define_and_bind();
+  st.execute(true);
+  return true;
 }
 
-// User Update function
-inline void update(sqlite::database &db, const User &obj) {
-  db << "UPDATE users SET id =?, username =?, email =?, age =?, created_at = ? "
-        "WHERE id = ?;"
+//-----------------------------------------------------------
 
-     << obj.id << obj.username << obj.email << obj.age << obj.created_at
+template <typename T, size_t N, bool IsView = false>
+struct EntityMetadataBase
+{
+  using type = T;
+  static constexpr bool is_view = IsView;
+  static constexpr size_t field_count = N;
+};
 
-     << obj.id;
+template <typename T>
+struct EntityMetadata;
+
+template <typename T>
+std::ostream& print_header(std::ostream& os)
+{
+  std::apply([&](auto... m) { ((os << std::left << std::setw(std::get<2>(m)) << std::get<0>(m)), ...); },
+             EntityMetadata<T>::members);
+  return os;
 }
 
-// User Delete function
-inline void remove(sqlite::database &db, int id) {
-  db << "DELETE FROM users WHERE id = ?;"
+template <typename T>
+std::ostream& print_row(std::ostream& os, const T& obj)
+{
+  std::apply([&](auto... m) { ((os << std::left << std::setw(std::get<2>(m)) << obj.*(std::get<1>(m))), ...); },
+             EntityMetadata<T>::members);
+  return os;
+}
+template <typename T>
+void printHeader();
 
-     << id;
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec)
+{
+  print_header<T>(os) << "\n";
+  for (const auto& item : vec) print_row(os, item) << '\n';
+  return os;
 }
 
-// End of User table operations
-// ============================================================================
+//-------------------------------------------------------------
 
-// ============================================================================
-// Product TABLE CRUD Operations
-// Target: products
-// ============================================================================
+// Insert
+template <typename T>
+bool insert(soci::session& sql, const T& obj);
 
-// Product Insert function
-inline void insert(sqlite::database &db, const Product &obj) {
-  db << "INSERT INTO products (product_id, name, description, price, "
-        "stock_quantity, is_available)  VALUES (?, ?, ?, ?, ?, ?);"
-
-     << obj.product_id << obj.name << obj.description << obj.price
-     << obj.stock_quantity << obj.is_available;
+template <>
+bool insert<User>(soci::session& sql, const User& obj)
+{
+  return singleObjectOperation(sql,
+                               "INSERT INTO users (username, email, age, created_at) VALUES (:username, "
+                               ":email, :age, :created_at)",
+                               obj);
 }
 
-// Product Select All function
-inline std::vector<Product> selectAll(sqlite::database &db) {
-  std::vector<Product> results;
-  db << "SELECT product_id, name, description, price, stock_quantity, "
-        "is_available FROM products;" >>
-      [&](int product_id, std::string name, std::string description,
-          double price, int stock_quantity,
-          bool is_available) { results.emplace_back(); };
-  return results;
+template <>
+bool insert<Product>(soci::session& sql, const Product& obj)
+{
+  return singleObjectOperation(sql,
+                               "INSERT INTO products (product_id, name, description, price, "
+                               "stock_quantity, is_available) VALUES (:product_id, :name, :description, "
+                               ":price, :stock_quantity, :is_available)",
+                               obj);
 }
 
-// Product Select By ID function
-inline Product selectById(sqlite::database &db, int product_id) {
-  Product obj;
-  db << "SELECT product_id, name, description, price, stock_quantity, "
-        "is_available FROM products WHERE product_id = ?;"
-
-     << product_id
-
-      >> [&](int product_id, std::string name, std::string description,
-             double price, int stock_quantity, bool is_available) {
-          obj.product_id = product_id;
-          obj.name = name;
-          obj.description = description;
-          obj.price = price;
-          obj.stock_quantity = stock_quantity;
-          obj.is_available = is_available;
-        };
-  return obj;
+template <>
+bool insert<Order>(soci::session& sql, const Order& obj)
+{
+  return singleObjectOperation(sql,
+                               "INSERT INTO orders (user_id, total_amount, status) VALUES (:user_id, "
+                               ":total_amount, :status)",
+                               obj);
 }
 
-// Product Update function
-inline void update(sqlite::database &db, const Product &obj) {
-  db << "UPDATE products SET product_id =?, name =?, description =?, price =?, "
-        "stock_quantity =?, is_available = ? WHERE product_id = ?;"
+// Select by ID
+template <typename T, typename IdType>
+T selectById(soci::session& sql, const IdType& id);
 
-     << obj.product_id << obj.name << obj.description << obj.price
-     << obj.stock_quantity << obj.is_available
+// Select all
 
-     << obj.product_id;
+template <typename T>
+std::vector<T> selectAll(soci::session& sql);
+
+template <>
+std::vector<User> selectAll<User>(soci::session& sql)
+{
+  return getMultipleQuery<User>(sql, "SELECT id, username, email, age, created_at FROM users ");
 }
 
-// Product Delete function
-inline void remove(sqlite::database &db, int product_id) {
-  db << "DELETE FROM products WHERE product_id = ?;"
-
-     << product_id;
+template <>
+std::vector<Product> selectAll<Product>(soci::session& sql)
+{
+  return getMultipleQuery<Product>(sql,
+                                   "SELECT product_id, name, description, price, stock_quantity, "
+                                   "is_available FROM products ");
 }
 
-// End of Product table operations
-// ============================================================================
-
-// ============================================================================
-// Order TABLE CRUD Operations
-// Target: orders
-// ============================================================================
-
-// Order Insert function
-inline void insert(sqlite::database &db, const Order &obj) {
-  db << "INSERT INTO orders (user_id, total_amount, status)  VALUES (?, ?, ?);"
-
-     << obj.user_id << obj.total_amount << obj.status;
+template <>
+std::vector<Order> selectAll<Order>(soci::session& sql)
+{
+  return getMultipleQuery<Order>(sql, "SELECT order_id, user_id, total_amount, status FROM orders ");
 }
 
-// Order Select All function
-inline std::vector<Order> selectAll(sqlite::database &db) {
-  std::vector<Order> results;
-  db << "SELECT order_id, user_id, total_amount, status FROM orders;" >>
-      [&](int order_id, int user_id, double total_amount, std::string status) {
-        results.emplace_back();
-      };
-  return results;
+template <>
+std::vector<UserSummary> selectAll<UserSummary>(soci::session& sql)
+{
+  return getMultipleQuery<UserSummary>(sql, "SELECT user_id, username, order_count, total_spent FROM user_summary ");
 }
 
-// Order Select By ID function
-inline Order selectById(sqlite::database &db, int order_id) {
-  Order obj;
-  db << "SELECT order_id, user_id, total_amount, status FROM orders WHERE "
-        "order_id = ?;"
+//---------------------Metadata Functions---------------------/
 
-     << order_id
+template <>
+struct EntityMetadata<User> : EntityMetadataBase<User, 5, false>
+{
+  static constexpr const char* table_name = "users";
+  static constexpr auto members =
+    std::make_tuple(std::tuple{"id", &type::id, 15u, ""}, std::tuple{"username", &type::username, 15u, ""},
+                    std::tuple{"email", &type::email, 15u, ""}, std::tuple{"age", &type::age, 15u, ""},
+                    std::tuple{"created_at", &type::created_at, 15u, ""});
+};
 
-      >>
-      [&](int order_id, int user_id, double total_amount, std::string status) {
-        obj.order_id = order_id;
-        obj.user_id = user_id;
-        obj.total_amount = total_amount;
-        obj.status = status;
-      };
-  return obj;
-}
+template <>
+struct EntityMetadata<Product> : EntityMetadataBase<Product, 6, false>
+{
+  static constexpr const char* table_name = "products";
+  static constexpr auto members =
+    std::make_tuple(std::tuple{"product_id", &type::product_id, 12u, ""}, std::tuple{"name", &type::name, 15u, ""},
+                    std::tuple{"description", &type::description, 15u, ""}, std::tuple{"price", &type::price, 15u, ""},
+                    std::tuple{"stock_quantity", &type::stock_quantity, 15u, ""},
+                    std::tuple{"is_available", &type::is_available, 15u, ""});
+};
 
-// Order Update function
-inline void update(sqlite::database &db, const Order &obj) {
-  db << "UPDATE orders SET order_id =?, user_id =?, total_amount =?, status = "
-        "? WHERE order_id = ?;"
+template <>
+struct EntityMetadata<Order> : EntityMetadataBase<Order, 4, false>
+{
+  static constexpr const char* table_name = "orders";
+  static constexpr auto members = std::make_tuple(
+    std::tuple{"order_id", &type::order_id, 10u, ""}, std::tuple{"user_id", &type::user_id, 15u, ""},
+    std::tuple{"total_amount", &type::total_amount, 15u, ""}, std::tuple{"status", &type::status, 15u, ""});
+};
 
-     << obj.order_id << obj.user_id << obj.total_amount << obj.status
+template <>
+struct EntityMetadata<UserSummary> : EntityMetadataBase<UserSummary, 4, false>
+{
+  static constexpr const char* table_name = "user_summary";
+  static constexpr auto members = std::make_tuple(
+    std::tuple{"user_id", &type::user_id, 15u, ""}, std::tuple{"username", &type::username, 15u, ""},
+    std::tuple{"order_count", &type::order_count, 15u, ""}, std::tuple{"total_spent", &type::total_spent, 15u, ""});
+};
 
-     << obj.order_id;
-}
-
-// Order Delete function
-inline void remove(sqlite::database &db, int order_id) {
-  db << "DELETE FROM orders WHERE order_id = ?;"
-
-     << order_id;
-}
-
-// End of Order table operations
-// ============================================================================
-
-// ============================================================================
-// UserSummary VIEW Operations
-// Target: user_summary
-// ============================================================================
-
-// UserSummary Select All function
-inline std::vector<UserSummary> selectAll(sqlite::database &db) {
-  std::vector<UserSummary> results;
-  db << "SELECT user_id, username, order_count, total_spent FROM "
-        "user_summary;" >>
-      [&](int user_id, std::string username, int order_count,
-          double total_spent) { results.emplace_back(); };
-  return results;
-}
-
-// End of UserSummary view operations
-// ============================================================================
-
-} // namespace data
+}  // namespace data

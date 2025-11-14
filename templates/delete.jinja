@@ -1,8 +1,0 @@
-// {{ entity.Name }} Delete function
-inline void remove(sqlite::database &db{% if entity.PrimaryKeys %}, {{
-    entity.TypedPrimaryKeys| join(', ') }}{% endif %}) {
-    db << "DELETE FROM {{ entity.Target }} WHERE {{ entity.PrimaryKeys | join(' = ? AND ') }} = ?;"
-        {% for pk in entity.PrimaryKeys %}
-        << {{ pk }}
-        {% endfor %};
-}

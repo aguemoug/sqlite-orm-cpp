@@ -2,9 +2,11 @@
 #include "orm.h"
 #include <string>
 
-namespace data {
+namespace data
+{
 
-struct TABLE(users) User {
+struct TABLE(users) User
+{
   PK AUTOINC int id;
   std::string username;
   std::string email;
@@ -12,8 +14,9 @@ struct TABLE(users) User {
   long created_at;
 };
 
-struct TABLE(products) Product {
-  PK int product_id;
+struct TABLE(products) Product
+{
+  WIDTH(12) PK int product_id;
   std::string name;
   std::string description;
   double price;
@@ -21,14 +24,16 @@ struct TABLE(products) Product {
   bool is_available;
 };
 
-struct TABLE(orders) Order {
-  PK AUTOINC int order_id;
-  int user_id; // FK to users.id
+struct TABLE(orders) Order
+{
+  WIDTH(10) PK AUTOINC int order_id;
+  int user_id;  // FK to users.id
   double total_amount;
   std::string status;
 };
 
-struct VIEW(user_summary) UserSummary {
+struct VIEW(user_summary) UserSummary
+{
   READONLY int user_id;
   READONLY std::string username;
   READONLY int order_count;
@@ -36,8 +41,9 @@ struct VIEW(user_summary) UserSummary {
 };
 
 // This struct will be ignored
-struct IGNORE InternalConfig {
+struct IGNORE InternalConfig
+{
   std::string config_key;
   std::string config_value;
 };
-} // namespace data
+}  // namespace data
