@@ -3,8 +3,9 @@
 // Auto-generated SOCI mapping and CRUD operations
 // Generated on: {{ timestamp }}
 // Source: {{ source_file }}
-// Tables: {{ tables | map(attribute='name') | join(', ') }}
-// Views: {{ views | map(attribute='name') | join(', ') }}
+// Tables: {{ tables | map(attribute='Name') | join(', ') }}
+// Views: {{ views | map(attribute='Name') | join(', ') }}
+// Enums: {{ enums | map(attribute='Name') | join(', ') }}
 // ===================================================
 
 #include <soci/soci.h>
@@ -17,9 +18,47 @@
 // SOCI Type mapping 
 namespace soci{
 using namespace {{ namespace }};
+
+// -----------------------------------------------------------
+
+// Mapping for bool Fields
+// bool attributes will be mapped to int columns in database
+template <>
+struct type_conversion<bool>
+{
+  typedef int base_type;
+
+  static void from_base(int const& v, indicator i /* ind */, bool& e) { e = v; }
+
+  static void to_base(const bool& e, int& v, indicator& ind)
+  {
+    v = e;
+    ind = i_ok;
+  }
+};
+
+
+// Mapping for string Fields
+// NULL database columns will be mapped to empty strings
+template <>
+struct type_conversion<std::string>
+{
+  typedef std::string base_type;
+
+  static void from_base(std::string const& v, indicator i /* ind */, std::string& e) { e = i == i_null ? "" : v; }
+
+  static void to_base(const std::string& e, std::string& v, indicator& ind)
+  {
+    ind = v.empty() ? i_null : i_ok;
+    v=e;
+  }
+};
+
+
+
 {% for entity in entities %}
 
-// Entity : {{ entity.Name }} Target table/view 
+// Entity : {{ entity.Name }}  <==>  Database 
 template <>
 struct type_conversion<{{entity.Name}}>
 {
@@ -28,16 +67,20 @@ struct type_conversion<{{entity.Name}}>
   static void from_base(values const& v, indicator /* ind */,
   {{entity.Name}} & e)
   {
-
-   {% for f in entity.fields %} 
-      e.{{f.name}} = v.get<{{f.original_type}}>("{{f.name}}");      {% endfor %}
-
+{% for f in entity.Fields %}
+    {% if f.is_enum %}
+        e.{{ f.name }} = static_cast<{{ f.original_type }}>(v.get<int>("{{ f.name }}"));
+    {% else %}
+        e.{{ f.name }} = v.get<{{ f.original_type }}>("{{ f.name }}");
+    {% endif %}
+{% endfor %}
   }
 
   static void to_base(const {{entity.Name}}& e, values& v, indicator& ind)
   {
-   {% for field in entity.fields %} 
-      v.set("{{field.name}}", e.{{field.name}});    {% endfor %}
+{% for field in entity.Fields %}
+    {% if field.is_enum %} v.set("{{ field.name }}", static_cast<int>(e.{{ field.name }}));  {% else %}
+        v.set("{{ field.name }}", e.{{ field.name }}); {% endif %} {% endfor %}
       ind = i_ok;
   }
 };
@@ -141,6 +184,38 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec)
 }
 
 
+template <typename E>
+struct enum_traits;  // user specializes this per enum
+template <typename E>
+std::enable_if_t<std::is_enum_v<E>, std::ostream&> operator<<(std::ostream& os, E e)
+{
+  if constexpr (requires { enum_traits<E>::names; })
+  {
+    // name table available
+    auto val = static_cast<std::size_t>(e);
+    if (val < enum_traits<E>::names.size())
+      return os << enum_traits<E>::names[val];
+    else
+      return os << "Unknown(" << val << ")";
+  }
+  else
+  {
+    // fallback: print as integer
+    return os << static_cast<std::underlying_type_t<E>>(e);
+  }
+}
+
+{% for entity in enums %}
+template <>
+struct enum_traits<{{entity.Name}}>
+{
+  static constexpr std::array<const char*,{{entity.Fields | length }} > names = {
+    {% for field in entity.Fields %}"{{ field.name }}"{{ "," if not loop.last }}{% endfor %}
+    };
+};
+
+
+{% endfor %}
 //-------------------------------------------------------------
 
 
@@ -150,7 +225,7 @@ bool insert(soci::session& sql, const T& obj);
 {% for entity in tables %}
 
 template<>
-bool insert<{{entity.name}}>(soci::session& sql, const {{entity.name}}& obj)
+bool insert<{{entity.Name}}>(soci::session& sql, const {{entity.Name}}& obj)
 {
   return singleObjectOperation(sql, "INSERT INTO {{entity.Target}} ({{entity.InsertFields |
   join(', ')}}) VALUES (:{{entity.InsertFields | join(', :')}})", obj);
@@ -161,9 +236,6 @@ bool insert<{{entity.name}}>(soci::session& sql, const {{entity.name}}& obj)
 template <typename T,typename IdType>
 T selectById(soci::session& sql, const IdType& id);
 
-
-
-
 // Select all
 
 
@@ -173,9 +245,9 @@ std::vector<T> selectAll(soci::session& sql);
 
 {% for entity in entities %}
 template <>
-std::vector<{{entity.name}}> selectAll<{{entity.name}}>(soci::session& sql)
+std::vector<{{entity.Name}}> selectAll<{{entity.Name}}>(soci::session& sql)
 {
-  return getMultipleQuery<{{entity.name}}>(sql, "SELECT {{entity.Fields | join(', ') }} FROM {{entity.Target}} ");
+  return getMultipleQuery<{{entity.Name}}>(sql, "SELECT {{entity.Fields | map(attribute="name")  | join(', ') }} FROM {{entity.Target}} ");
 }
 
 
@@ -187,11 +259,11 @@ std::vector<{{entity.name}}> selectAll<{{entity.name}}>(soci::session& sql)
 
 {% for entity in entities %}
 template <>
-struct EntityMetadata<{{entity.name}}> : EntityMetadataBase<{{entity.name}}, {{entity.fields | length}}, {{ 'true' if entity.is_view else 'false' }}>
+struct EntityMetadata<{{entity.Name}}> : EntityMetadataBase<{{entity.Name}}, {{entity.Fields | length}}, {{ 'true' if entity.is_view else 'false' }}>
 {
   static constexpr const char* table_name = "{{entity.Target}}";
   static constexpr auto members = std::make_tuple(
-    {% for field in entity.fields -%}
+    {% for field in entity.Fields -%}
       std::tuple{"{{field.name}}", &type::{{field.name}}, {{field.width}}u, "{{field.sql_type}}"}{{ "," if not loop.last }}
     {%- endfor %} );
 };

@@ -3,611 +3,16 @@
 CPP-SQLite-ORM: A mini ORM for SQLite and C++
 Generates CRUD operations from C++ struct definitions with annotations.
 """
-
 import argparse
 import os
-import re
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass, field
 from datetime import datetime
+from parser import Entity, EntityType, Field, parse_file
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
-import clang.cindex
-from clang.cindex import CursorKind, TranslationUnit
 from jinja2 import Template
-
-MACRO = """
-#ifdef __CODE_GENERATOR__
-#define TABLE(name) __attribute__((annotate("table:" #name)))
-#define VIEW(name) __attribute__((annotate("view:" #name)))
-#define IGNORE __attribute__((annotate("ignore")))
-#define PK __attribute__((annotate("pk")))
-#define FK __attribute__((annotate("fk")))
-#define AUTOINC __attribute__((annotate("autoinc")))
-#define READONLY __attribute__((annotate("readonly")))
-#define WIDTH(w) __attribute__((annotate("width:" #w)))
-#else
-#define TABLE(name)
-#define VIEW(name)
-#define IGNORE
-#define PK
-#define FK
-#define AUTOINC
-#define READONLY
-#define WIDTH(w)
-#endif
-"""
-
-
-def inject_orm_header_smartly(filename):
-    try:
-        index = clang.cindex.Index.create()
-        args = [f"-I{dir}" for dir in include_dirs] + [
-            "-I" + os.path.dirname(orm_header_path)
-        ]
-        tu = index.parse(temp_filename, args=args)
-        return tu, combined_content
-    finally:
-        os.unlink(temp_filename)
-
-
-class StructParser:
-    """
-    A parser for C++ struct definitions that extracts struct metadata,
-    field information, and annotations.
-    """
-
-    def __init__(self, libclang_path: str = "/usr/lib/libclang.so"):
-        """Initialize the parser with libclang library path."""
-        try:
-            clang.cindex.Config.set_library_file(libclang_path)
-        except Exception as e:
-            print(f"Warning: Could not set libclang path: {e}")
-
-    @staticmethod
-    def get_annotations(node: clang.cindex.Cursor) -> List[str]:
-        """
-        Extract annotations from a node.
-
-        Args:
-            node: The clang cursor to extract annotations from
-
-        Returns:
-            List of annotation display names
-        """
-        return [
-            child.displayname
-            for child in node.get_children()
-            if child.kind == clang.cindex.CursorKind.ANNOTATE_ATTR
-        ]
-
-    def parse_file(
-        self, file_path: str, compiler_args: Optional[List[str]] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Parse a C++ header file and extract all struct definitions.
-
-        Args:
-            file_path: Path to the C++ header file to parse
-            compiler_args: Additional compiler arguments for parsing
-
-        Returns:
-            List of dictionaries containing struct information
-        """
-        file_path = Path(file_path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"File not found: {file_path}")
-
-        with open(file_path, "r") as f:
-            original_content = f.read()
-
-        # Find all include directives to inject ORM header at the right place
-        lines = original_content.split("\n")
-        injection_point = 0
-
-        # Find the last include statement or start of file
-        for i, line in enumerate(lines):
-            if line.strip().startswith("#include"):
-                injection_point = i + 1
-            elif line.strip() and not line.strip().startswith("#"):
-                # Found non-preprocessor code, stop here
-                break
-
-        # Inject ORM header content
-        lines.insert(injection_point, f"// Injected ORM header content\n{MACRO}")
-        combined_content = "\n".join(lines)
-
-        # Create temporary file
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".c", delete=False) as f:
-            f.write(combined_content)
-        temp_filename = f.name
-
-        # Default compiler arguments
-        if compiler_args is None:
-            compiler_args = [
-                "-x",
-                "c++",
-                "-std=c++14",
-                "-D__CODE_GENERATOR__",
-            ]
-
-        try:
-            index = clang.cindex.Index.create()
-            translation_unit = index.parse(
-                str(temp_filename),
-                args=compiler_args,
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to parse file {file_path}: {e}")
-
-        target_stem = Path(temp_filename).stem
-        structs = []
-
-        for node in translation_unit.cursor.walk_preorder():
-            # Skip nodes that don't belong to our target file
-            if self._should_skip_node(node, target_stem):
-                # print(f"Skipping node from different file: {node.spelling}")
-                continue
-            # print(f"Visiting node: {node.spelling} of kind {node.kind}")
-
-            if (
-                node.kind == CursorKind.STRUCT_DECL
-                # and node.is_definition()
-                and node.spelling
-            ):  # Skip anonymous structs
-
-                struct_info = self._parse_struct_node(node)
-                structs.append(struct_info)
-
-        return structs
-
-    def _should_skip_node(self, node: clang.cindex.Cursor, target_stem: str) -> bool:
-        """
-        Determine if a node should be skipped during parsing.
-
-        Args:
-            node: The clang cursor to check
-            target_stem: The stem of the target file
-
-        Returns:
-            True if the node should be skipped, False otherwise
-        """
-        if node.location.file is None:
-            return True
-
-        node_file_stem = Path(node.location.file.name).stem
-        # print(node_file_stem, target_stem)
-        return node_file_stem != target_stem
-
-    def _parse_struct_node(self, node: clang.cindex.Cursor) -> Dict[str, Any]:
-        """
-        Parse a single struct node and extract its information.
-
-        Args:
-            node: The struct cursor to parse
-
-        Returns:
-            Dictionary containing struct information
-        """
-        struct_info = {
-            "name": node.spelling,
-            "fields": [],
-            "attributes": self.get_annotations(node),
-            "location": {
-                "file": node.location.file.name if node.location.file else None,
-                "line": node.location.line,
-                "column": node.location.column,
-            },
-        }
-
-        for child in node.get_children():
-            if child.kind == CursorKind.FIELD_DECL:
-                field_info = self._parse_field_node(child)
-                struct_info["fields"].append(field_info)
-
-        return struct_info
-
-    def _parse_field_node(self, node: clang.cindex.Cursor) -> Dict[str, Any]:
-        """
-        Parse a single field node and extract its information.
-
-        Args:
-            node: The field cursor to parse
-
-        Returns:
-            Dictionary containing field information
-        """
-        return {
-            "name": node.spelling,
-            "type": node.type.spelling,
-            "attrs": self.get_annotations(node),
-            "location": {
-                "file": node.location.file.name if node.location.file else None,
-                "line": node.location.line,
-                "column": node.location.column,
-            },
-        }
-
-
-class EntityType:
-    TABLE = "Table"
-    VIEW = "View"
-
-
-@dataclass
-class Field:
-    name: str
-    is_primary_key: bool = False
-    width: int = 20
-    is_foreign_key: bool = False
-    is_auto_increment: bool = False
-    is_readonly: bool = False
-    is_ignored: bool = False
-    original_type: Optional[str] = None
-    annotations: List[str] = field(default_factory=list)
-
-
-@dataclass
-class Entity:
-    name: str
-    entity_type: str  # EntityType.TABLE or EntityType.VIEW
-    target_table: str  # Extracted from table:name or view:name annotations
-    fields: List[Field]
-    ignored: bool = False
-    namespace: str = ""  # Extract namespace from the original location
-    original_struct: Optional[Dict[str, Any]] = None
-    annotations: List[str] = field(default_factory=list)
-
-    @property
-    def Name(self):
-        return self.name
-
-    @property
-    def Target(self):
-        return self.target_table
-
-    @property
-    def Fields(self):
-        return [f.name for f in self.fields]
-
-    @property
-    def FieldsPlaceholders(self):
-        return ", ".join(["?" for _ in self.fields])
-
-    @property
-    def InsertFields(self) -> List[str]:
-        return [
-            f.name for f in self.fields if not f.is_auto_increment and not f.is_readonly
-        ]
-
-    @property
-    def InsertFieldsPlaceholders(self) -> str:
-        return ", ".join(
-            ["?" for f in self.fields if not f.is_auto_increment and not f.is_readonly]
-        )
-
-    def getFieldByName(self, name: str) -> Optional[Field]:
-        """Get a field by its name, returns None if not found"""
-        for field in self.fields:
-            if field.name == name:
-                return field
-        return None
-
-    @property
-    def PrimaryKeys(self):
-        return [f.name for f in self.fields if f.is_primary_key]
-
-    @property
-    def HasPrimaryKeys(self):
-        return any(f.is_primary_key for f in self.fields)
-
-    @property
-    def TypedNames(self):
-        return [f"{f.original_type} {f.name}" for f in self.fields]
-
-    @property
-    def TypedPrimaryKeysRefs(self):
-        return [
-            f"const { f.original_type} & {f.name}"
-            for f in self.fields
-            if f.is_primary_key
-        ]
-
-    @property
-    def TypedPrimaryKeys(self):
-        return [f"{f.original_type} {f.name}" for f in self.fields if f.is_primary_key]
-
-    @property
-    def PkParms(self):
-        return [
-            f"{self.getFieldByName(pk).original_type} {pk}" for pk in self.PrimaryKeys
-        ]
-
-    @property
-    def PkParmsRefs(self):
-        return [
-            f"{self.getFieldByName(pk).original_type} & {pk}" for pk in self.PrimaryKeys
-        ]
-
-
-class EntityParser:
-    """
-    Parser to convert C++ struct definitions into Entity objects
-    with support for the specific macro annotations
-    """
-
-    def __init__(self):
-        # Patterns for macro annotations
-        self.table_pattern = re.compile(r'table:([^"]+)')
-        self.view_pattern = re.compile(r'view:([^"]+)')
-        self.width_pattern = re.compile(r'width:([^"]+)')
-        self.ignore_pattern = re.compile(r"ignore")
-        self.primary_key_patterns = [re.compile(r"pk")]
-        self.foreign_key_patterns = [re.compile(r"fk")]
-        self.auto_inc_pattern = re.compile(r"autoinc")
-        self.readonly_pattern = re.compile(r"readonly")
-
-    def parse_from_structs(self, structs: List[Dict[str, Any]]) -> List[Entity]:
-        """
-        Convert parsed C++ structs into Entity objects
-
-        Args:
-            structs: List of struct dictionaries from the clang parser
-
-        Returns:
-            List of Entity objects
-        """
-        entities = []
-
-        for struct in structs:
-            entity = self._parse_single_entity(struct)
-            if entity:
-                entities.append(entity)
-
-        return entities
-
-    def _parse_single_entity(self, struct: Dict[str, Any]) -> Optional[Entity]:
-        """
-        Parse a single struct into an Entity
-
-        Args:
-            struct: Struct dictionary from clang parser
-
-        Returns:
-            Entity object or None if the struct should be ignored
-        """
-        # Extract namespace from the struct's location if available
-        namespace = self._extract_namespace(struct)
-
-        # Check if this entity should be ignored
-        if self._should_ignore_entity(struct):
-            return Entity(
-                name=struct["name"],
-                entity_type=EntityType.TABLE,
-                target_table="",
-                fields=[],
-                ignored=True,
-                namespace=namespace,
-                original_struct=struct,
-            )
-
-        # Determine entity type and extract target table/view name
-        entity_type, target_name = self._extract_entity_type_and_target(struct)
-
-        if not target_name:
-            print(f"Warning: Struct '{struct['name']}' has no TABLE or VIEW annotation")
-            return None
-
-        # Parse fields
-        fields = self._parse_fields(struct.get("fields", []))
-
-        return Entity(
-            name=struct["name"],
-            entity_type=entity_type,
-            target_table=target_name,
-            fields=fields,
-            ignored=False,
-            namespace=namespace,
-            original_struct=struct,
-            annotations=struct.get("attributes", []),
-        )
-
-    def _extract_namespace(self, struct: Dict[str, Any]) -> str:
-        """
-        Extract namespace from struct location or other available data
-
-        Args:
-            struct: Struct dictionary
-
-        Returns:
-            Namespace string
-        """
-        # Try to get namespace from location or other metadata
-        # This might need adjustment based on how clang provides this info
-        if "location" in struct and struct["location"].get("file"):
-            # You might need to parse the file content to get namespace
-            # For now, return empty string
-            return ""
-        return ""
-
-    def _should_ignore_entity(self, struct: Dict[str, Any]) -> bool:
-        """
-        Check if an entity should be ignored based on IGNORE annotation
-
-        Args:
-            struct: Struct dictionary
-
-        Returns:
-            True if the entity should be ignored
-        """
-        for annotation in struct.get("attributes", []):
-            if self.ignore_pattern.search(annotation):
-                return True
-        return False
-
-    def _extract_entity_type_and_target(
-        self, struct: Dict[str, Any]
-    ) -> tuple[str, str]:
-        """
-        Extract entity type (Table/View) and target name from annotations
-
-        Args:
-            struct: Struct dictionary
-
-        Returns:
-            Tuple of (entity_type, target_name)
-        """
-        for annotation in struct.get("attributes", []):
-            # Check for TABLE annotation
-            table_match = self.table_pattern.search(annotation)
-            if table_match:
-                table_name = table_match.group(1).strip()
-                # Remove any quotes if present
-                table_name = table_name.replace('"', "").replace("'", "")
-                return EntityType.TABLE, table_name
-
-            # Check for VIEW annotation
-            view_match = self.view_pattern.search(annotation)
-            if view_match:
-                view_name = view_match.group(1).strip()
-                view_name = view_name.replace('"', "").replace("'", "")
-                return EntityType.VIEW, view_name
-
-        return EntityType.TABLE, ""
-
-    def _parse_fields(self, fields_data: List[Dict[str, Any]]) -> List[Field]:
-        """
-        Parse field data into Field objects with support for all macro annotations
-
-        Args:
-            fields_data: List of field dictionaries from clang parser
-
-        Returns:
-            List of Field objects
-        """
-        fields = []
-
-        for field_data in fields_data:
-            # Check if the field should be ignored
-            if self._should_ignore_field(field_data):
-                continue
-
-            field = Field(
-                name=field_data["name"],
-                original_type=field_data["type"],
-                annotations=field_data.get("attrs", []),
-            )
-
-            # Set field properties based on annotations
-            field.is_primary_key = self._is_primary_key(field_data)
-            field.is_foreign_key = self._is_foreign_key(field_data)
-            field.is_auto_increment = self._is_auto_increment(field_data)
-            field.is_readonly = self._is_readonly(field_data)
-            field.is_ignored = self._should_ignore_field(field_data)
-            field.width = self._get_field_width(field_data)
-
-            fields.append(field)
-
-        return fields
-
-    def _should_ignore_field(self, field_data: Dict[str, Any]) -> bool:
-        """Check if a field has IGNORE annotation"""
-        for annotation in field_data.get("attrs", []):
-            if self.ignore_pattern.search(annotation):
-                return True
-        return False
-
-    def _get_field_width(self, field_data: Dict[str, Any]) -> int:
-        """Get the width of a field from WIDTH annotation"""
-        for annotation in field_data.get("attrs", []):
-            width_match = self.width_pattern.search(annotation)
-            if width_match:
-                try:
-                    return int(width_match.group(1).strip())
-                except ValueError:
-                    pass
-        return 15  # Default width
-
-    def _is_primary_key(self, field_data: Dict[str, Any]) -> bool:
-        """Check if a field has PK annotation"""
-        for annotation in field_data.get("attrs", []):
-            for pattern in self.primary_key_patterns:
-                if pattern.search(annotation):
-                    return True
-        return False
-
-    def _is_foreign_key(self, field_data: Dict[str, Any]) -> bool:
-        """Check if a field has FK annotation"""
-        for annotation in field_data.get("attrs", []):
-            for pattern in self.foreign_key_patterns:
-                if pattern.search(annotation):
-                    return True
-        return False
-
-    def _is_auto_increment(self, field_data: Dict[str, Any]) -> bool:
-        """Check if a field has AUTOINC annotation"""
-        for annotation in field_data.get("attrs", []):
-            if self.auto_inc_pattern.search(annotation):
-                return True
-        return False
-
-    def _is_readonly(self, field_data: Dict[str, Any]) -> bool:
-        """Check if a field has READONLY annotation"""
-        for annotation in field_data.get("attrs", []):
-            if self.readonly_pattern.search(annotation):
-                return True
-        return False
-
-
-# Enhanced utility functions
-def filter_entities_by_type(entities: List[Entity], entity_type: str) -> List[Entity]:
-    """Filter active entities by type"""
-    return [
-        entity
-        for entity in entities
-        if not entity.ignored and entity.entity_type == entity_type
-    ]
-
-
-def get_primary_keys(entity: Entity) -> List[Field]:
-    """Get all primary key fields from an entity"""
-    return [field for field in entity.fields if field.is_primary_key]
-
-
-def get_foreign_keys(entity: Entity) -> List[Field]:
-    """Get all foreign key fields from an entity"""
-    return [field for field in entity.fields if field.is_foreign_key]
-
-
-def get_auto_increment_fields(entity: Entity) -> List[Field]:
-    """Get all auto-increment fields from an entity"""
-    return [field for field in entity.fields if field.is_auto_increment]
-
-
-def get_readonly_fields(entity: Entity) -> List[Field]:
-    """Get all readonly fields from an entity"""
-    return [field for field in entity.fields if field.is_readonly]
-
-
-# Complete workflow integration
-def parse_entities_from_file(file_path: str) -> List[Entity]:
-    """
-    Complete workflow: Parse C++ file and convert to Entity objects
-    """
-
-    struct_parser = StructParser()
-    entity_parser = EntityParser()
-
-    # Parse structs from file
-    structs = struct_parser.parse_file(file_path)
-
-    # Convert to entities
-    entities = entity_parser.parse_from_structs(structs)
-
-    return entities
 
 
 def format_with_clangformat(code: str, style: str = "file") -> str:
@@ -639,94 +44,56 @@ def format_with_clangformat(code: str, style: str = "file") -> str:
         return code
 
 
-def apply(template_name, entity):
-    try:
-        with open(template_name, "r") as file:
-            template_content = file.read()
-
-        return Template(template_content).render(entity=entity)
-
-    except FileNotFoundError:
-        raise ValueError(f"Template file not found: {template_name}")
-    except Exception as e:
-        raise ValueError(
-            f"Error processing template {template_name}: {str(e)} Entity: {entity.Name}"
-        )
-
-
-def generate_crud_header(
-    entities, source_file: str, templates_dir: str, namespace: str = "data"
+def generate_header(
+    source_file: str,
+    template: str,
+    namespace: str = "data",
+    output_file: str = "output.hpp",
 ):
     """Generate complete CRUD header file with operations for both tables and views"""
 
+    entities = parse_file(source_file)
     # Separate entities by type
     tables = [
-        e for e in entities if not e.ignored and e.entity_type == EntityType.TABLE
+        e for e in entities if not e.is_ignored and e.entity_type == EntityType.TABLE
     ]
-    views = [e for e in entities if not e.ignored and e.entity_type == EntityType.VIEW]
+    views = [
+        e for e in entities if not e.is_ignored and e.entity_type == EntityType.VIEW
+    ]
+    enums = [
+        e for e in entities if not e.is_ignored and e.entity_type == EntityType.ENUM
+    ]
     all_entities = tables + views
 
     # Load master template
-    tmpl = Template(open(templates_dir + "/soci.jinja").read())
-
-    return tmpl.render(
-        timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        source_file=os.path.basename(source_file),
-        namespace=namespace,
-        entities=all_entities,
-        tables=tables,
-        views=views,
-    )
-
-
-def generate_complete_crud(
-    entities,
-    source_file: str,
-    templates_dir: str,
-    output_file: str = "output.hpp",
-    namespace: str = "data",
-):
-    """Generate and save complete CRUD header file with tables and views"""
-
     try:
-        header_content = generate_crud_header(
-            entities, source_file, templates_dir, namespace
+        template_path = Path(template)
+        if not template_path.exists():
+            raise FileNotFoundError(f"Template file not found: {template_path}")
+        tmpl = Template(open(template).read())
+
+        header_content = tmpl.render(
+            timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            source_file=os.path.basename(source_file),
+            namespace=namespace,
+            entities=all_entities,
+            enums=enums,
+            tables=tables,
+            views=views,
         )
+
         header_content = format_with_clangformat(header_content)
 
         with open(output_file, "w") as f:
             f.write(header_content)
 
-        # Print summary
-        tables = [
-            e for e in entities if not e.ignored and e.entity_type == EntityType.TABLE
-        ]
-        views = [
-            e for e in entities if not e.ignored and e.entity_type == EntityType.VIEW
-        ]
-
         print(f"Successfully generated: {output_file}")
-        print(f"Tables processed: {len(tables)}")
-        print(f"Views processed: {len(views)}")
-
-        print("\nGenerated operations:")
-        for entity in tables:
-            pks = entity.PrimaryKeys
-            ops = "INSERT, SELECT_ALL" + (
-                f", SELECT_BY_ID, UPDATE, DELETE" if pks else ""
-            )
-            print(f"  TABLE {entity.name}: {ops}")
-
-        for entity in views:
-            pks = entity.PrimaryKeys
-            ops = "SELECT_ALL" + (f", SELECT_BY_ID" if pks else "")
-            print(f"  VIEW  {entity.name}: {ops}")
-
-        return True
-
+        print(f"Tables processed: {len(tables)} :{', '.join([t.Name for t in tables])}")
+        print(f"Views processed: {len(views)} :{', '.join([v.Name for v in views])}")
+        print(f"Enums processed: {len(enums)} :{', '.join([e.Name for e in enums])}")
     except Exception as e:
-        print(f"Error generating CRUD header: {e}")
-        return False
+        print(f"Generation error : {e}")
+        sys.exit(1)
 
 
 def main():
@@ -808,30 +175,12 @@ Examples:
         sys.exit(1)
 
     try:
-        if args.verbose:
-            print(f"Parsing {args.input_file}...")
-
-        # Parse entities
-        entities = parse_entities_from_file(args.input_file)
-
-        if args.verbose:
-            print(f"Found {len(entities)} entities")
-
-        # Generate CRUD operations
-        success = generate_complete_crud(
-            entities=entities,
+        generate_header(
             source_file=args.input_file,
-            templates_dir=args.template,
-            output_file=args.output,
+            template=os.path.join(args.template, "soci.jinja"),
             namespace=args.namespace,
+            output_file=args.output,
         )
-
-        if success:
-            if args.verbose:
-                print("Code generation completed successfully")
-            sys.exit(0)
-        else:
-            sys.exit(1)
 
     except FileNotFoundError as e:
         print(f"Error: {e}")
