@@ -5,12 +5,20 @@
 namespace data
 {
 
+enum class UserStatus
+{
+  ACTIVE = 1,
+  INACTIVE = 0,
+  BANNED = -1
+};
+
 struct TABLE(users) User
 {
   PK AUTOINC int id;
   std::string username;
   std::string email;
   int age;
+  UserStatus status;
   long created_at;
 };
 
