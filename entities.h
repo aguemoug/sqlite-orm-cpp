@@ -12,12 +12,25 @@ enum class UserStatus
   BANNED = -1
 };
 
-struct TABLE(users) User
+struct BaseTableEntity
 {
   PK AUTOINC int id;
+};
+
+struct BaseViewEntity
+{
+};
+
+struct Person
+{
+  std::string first_name;
+  std::string last_name;
+  int age;
+};
+struct TABLE(users) User : Person, BaseTableEntity
+{
   std::string username;
   std::string email;
-  int age;
   UserStatus status;
   long created_at;
 };

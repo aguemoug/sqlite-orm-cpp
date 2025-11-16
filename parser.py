@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import clang.cindex
+from clang.cindex import CursorKind
 
 MACRO = """
 #ifdef __CODE_GENERATOR__
@@ -71,6 +72,7 @@ class Entity:
     Name: str
     entity_type: EntityType
     Fields: List[Field] = field(default_factory=list)
+    Parents: List[str] = field(default_factory=list)
     Target: Optional[str] = None
     is_ignored: bool = False
     namespace: Optional[str] = None
@@ -105,7 +107,9 @@ def print_field(field: Field, indent: int = 0) -> None:
 def print_entity(entity: Entity, show_fields: bool = True) -> None:
     """Print an Entity object with formatted output."""
     print("=" * 60)
-    print(f"ENTITY: {entity.Name}")
+    print(
+        f"ENTITY: {entity.Name} BASED ON {', '.join(entity.Parents) if entity.Parents else 'None'}"
+    )
     print("=" * 60)
     print(f"Type: {entity.entity_type}")
 
@@ -161,7 +165,9 @@ def __field_str__(self) -> str:
 def __entity_str__(self) -> str:
     """String representation of Entity."""
     fields_str = "\n  ".join(str(field) for field in self.Fields)
-    return f"Entity: {self.Name} ({self.entity_type})\n  {fields_str}"
+    return (
+        f"Entity: {self.Name} BASE :{self.Parents} ({self.entity_type})\n  {fields_str}"
+    )
 
 
 # Add the string methods to the classes (optional)
@@ -187,6 +193,25 @@ def combine_header_with_file(original_content: str) -> str:
     return combined_content
 
 
+def get_base_classes(cursor):
+    """Get all base classes for a class"""
+    bases = []
+    for child in cursor.get_children():
+        if child.kind == CursorKind.CXX_BASE_SPECIFIER:
+            bases.append(
+                {
+                    "name": (
+                        child.get_definition().displayname
+                        if child.get_definition()
+                        else child.displayname
+                    ),
+                    "access_specifier": child.access_specifier,
+                    "cursor": child,
+                }
+            )
+    return bases
+
+
 def get_annotations(node: clang.cindex.Cursor) -> List[str]:
     return [
         child.displayname
@@ -204,6 +229,14 @@ def process_entity(
         entity_type=EntityType.TABLE,
         namespace=namespace,
     )
+
+    bases_classes = get_base_classes(node)
+    for base in bases_classes:
+        if base["name"] == "BaseTableEntity":
+            entity.entity_type = EntityType.TABLE
+        elif base["name"] == "BaseViewEntity":
+            entity.entity_type = EntityType.VIEW
+        entity.Parents.append(base["name"])
 
     for attr in get_annotations(node):
         if match := TABLE_RGX.match(attr):
@@ -301,23 +334,35 @@ def parse_file(file_path: str) -> List[Entity]:
         if node.location.file and Path(node.location.file.name) != Path(temp_filename):
             continue
 
-        if node.kind == clang.cindex.CursorKind.NAMESPACE:
+        if node.kind == CursorKind.NAMESPACE:
             namespace = node.spelling
         elif node.kind in (
-            clang.cindex.CursorKind.STRUCT_DECL,
-            clang.cindex.CursorKind.CLASS_DECL,
+            CursorKind.STRUCT_DECL,
+            CursorKind.CLASS_DECL,
         ):
             entity = process_entity(node, None, target_stem)
             if entity:
                 data["entities"].append(entity)
-        elif node.kind == clang.cindex.CursorKind.ENUM_DECL:
+        elif node.kind == CursorKind.ENUM_DECL:
             enum = process_enum(node, None)
             if enum:
                 data["enums"].append(enum)
+
+    # Process entities to add inherited fields
+    for entity in data["entities"]:
+        all_fields = list(entity.Fields)
+        for parent_name in entity.Parents:
+            parent_entity = next(
+                (e for e in data["entities"] if e.Name == parent_name), None
+            )
+            if parent_entity:
+                all_fields = parent_entity.Fields + all_fields
+        entity.Fields = all_fields
     return data["entities"] + data["enums"]
 
 
 if __name__ == "__main__":
-    cpp_file_path = "../../src/exper/entities.h"
+    cpp_file_path = "entities.h"
     entities = parse_file(cpp_file_path)
-    print_entities(entities, show_fields=True)
+    for entity in entities:
+        print(entity)
