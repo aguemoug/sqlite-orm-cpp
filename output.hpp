@@ -1,7 +1,7 @@
 #pragma once
 // ===================================================
 // Auto-generated SOCI mapping and CRUD operations
-// Generated on: 2025-11-15 22:21:49
+// Generated on: 2025-11-16 08:58:13
 // Source: entities.h
 // Tables: User, Product, Order
 // Views: UserSummary
@@ -57,11 +57,15 @@ template <> struct type_conversion<User> {
 
     e.id = v.get<int>("id");
 
+    e.first_name = v.get<std::string>("first_name");
+
+    e.last_name = v.get<std::string>("last_name");
+
+    e.age = v.get<int>("age");
+
     e.username = v.get<std::string>("username");
 
     e.email = v.get<std::string>("email");
-
-    e.age = v.get<int>("age");
 
     e.status = static_cast<UserStatus>(v.get<int>("status"));
 
@@ -72,11 +76,15 @@ template <> struct type_conversion<User> {
 
     v.set("id", e.id);
 
+    v.set("first_name", e.first_name);
+
+    v.set("last_name", e.last_name);
+
+    v.set("age", e.age);
+
     v.set("username", e.username);
 
     v.set("email", e.email);
-
-    v.set("age", e.age);
     v.set("status", static_cast<int>(e.status));
 
     v.set("created_at", e.created_at);
@@ -317,7 +325,8 @@ template <typename T> std::vector<T> selectAll(soci::session &sql);
 
 template <> std::vector<User> selectAll<User>(soci::session &sql) {
   return getMultipleQuery<User>(
-      sql, "SELECT id, username, email, age, status, created_at FROM users ");
+      sql, "SELECT id, first_name, last_name, age, username, email, status, "
+           "created_at FROM users ");
 }
 
 template <> std::vector<Product> selectAll<Product>(soci::session &sql) {
@@ -340,13 +349,15 @@ std::vector<UserSummary> selectAll<UserSummary>(soci::session &sql) {
 
 //---------------------Metadata Functions---------------------/
 
-template <> struct EntityMetadata<User> : EntityMetadataBase<User, 6, false> {
+template <> struct EntityMetadata<User> : EntityMetadataBase<User, 8, false> {
   static constexpr const char *table_name = "users";
   static constexpr auto members =
       std::make_tuple(std::tuple{"id", &type::id, 20u, ""},
+                      std::tuple{"first_name", &type::first_name, 20u, ""},
+                      std::tuple{"last_name", &type::last_name, 20u, ""},
+                      std::tuple{"age", &type::age, 20u, ""},
                       std::tuple{"username", &type::username, 20u, ""},
                       std::tuple{"email", &type::email, 20u, ""},
-                      std::tuple{"age", &type::age, 20u, ""},
                       std::tuple{"status", &type::status, 20u, ""},
                       std::tuple{"created_at", &type::created_at, 20u, ""});
 };
